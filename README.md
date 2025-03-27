@@ -1,9 +1,9 @@
-# src
+# Soundbook
 
 ## Author
 
-<!-- Insert Your Name Here -->
+Willem Hilliard
 
 ## Description
 
-<!-- Describe your example here -->
+A sketchbook for sound
