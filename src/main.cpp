@@ -16,9 +16,8 @@ DaisySeed hardware;
 
 SdmmcHandler sdcard;
 FatFSInterface fsi;
-WavWriter<32768> writer;
-int count;
-bool saved;
+WavWriter<16384> writer;
+bool saved = true;
 
 #define BUFFER_LENGTH (48000 * 349) // 349.52 secs; 48k * 2 (stereo) * 2  (16-bit or 2 bytes per sample) = 192k/s
 float DSY_SDRAM_BSS Buffer[BUFFER_LENGTH];
@@ -29,7 +28,7 @@ uint32_t end = 48000;
 float sysSampleRate;
 
 bool record = false;
-bool play = true;
+bool play = false;
 
 struct StereoPair{
     float left;
@@ -79,6 +78,9 @@ void AudioCallback(AudioHandle::InterleavingInputBuffer  in,
                 SetBufferValue(bufferIndex * 2.0f, StereoPair{in[i], in[i+1]}); //* 2 to access the buffer as if it contained single left and right channel structs
                 bufferIndex += 1.0f; 
                 end = bufferIndex;
+
+                float sampleArray[2] = {in[i], in[i+1]};
+                writer.Sample(sampleArray); // Call the Sample function with the array
             }
             else if(play){
                 if (bufferIndex < end)
@@ -93,9 +95,6 @@ void AudioCallback(AudioHandle::InterleavingInputBuffer  in,
                 }      
         out[i] = sampled.left + in[i];
         out[i + 1] = sampled.right + in[i + 1]; 
-        float sampleArray[2] = {sampled.left, sampled.right};
-        writer.Sample(sampleArray); // Call the Sample function with the array
-        count++;
         }          
 }
 
@@ -139,7 +138,7 @@ int main(void)
 
     System::Delay(100);
 
-    WavWriter<32768>::Config config;
+    WavWriter<16384>::Config config;
     config.samplerate = sysSampleRate; 
     config.channels = 2;          
     config.bitspersample = 16;    
@@ -157,13 +156,16 @@ int main(void)
         if (recButton.RisingEdge()){ //resets buffer index when recording begins
             bufferIndex = 0;
         }
+        if (recButton.FallingEdge()){
+            saved = false;
+        }
         record = recButton.Pressed();
         if (playButton.RisingEdge()){ //toggles playback
             play = !play; 
         } 
         
         writer.Write();
-        if(count>=48000 && !saved){
+        if(!saved){
             writer.SaveFile();
             hardware.PrintLine("file saved");
             saved = true;
