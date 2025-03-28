@@ -1,10 +1,24 @@
 #include "daisy_seed.h"
 #include "daisysp.h"
 
+//ostensibly needed for sd writing
+#include <stdio.h>
+#include <string.h>
+#include "daisy_core.h"
+#include "util/wav_format.h"
+#include "ff.h"
+#include "fatfs.h"
+
 using namespace daisy;
 using namespace daisysp;
 
 DaisySeed hardware;
+
+SdmmcHandler sdcard;
+FatFSInterface fsi;
+WavWriter<32768> writer;
+int count;
+bool saved;
 
 #define BUFFER_LENGTH (48000 * 349) // 349.52 secs; 48k * 2 (stereo) * 2  (16-bit or 2 bytes per sample) = 192k/s
 float DSY_SDRAM_BSS Buffer[BUFFER_LENGTH];
@@ -15,7 +29,7 @@ uint32_t end = 48000;
 float sysSampleRate;
 
 bool record = false;
-bool play = false;
+bool play = true;
 
 struct StereoPair{
     float left;
@@ -79,6 +93,9 @@ void AudioCallback(AudioHandle::InterleavingInputBuffer  in,
                 }      
         out[i] = sampled.left + in[i];
         out[i + 1] = sampled.right + in[i + 1]; 
+        float sampleArray[2] = {sampled.left, sampled.right};
+        writer.Sample(sampleArray); // Call the Sample function with the array
+        count++;
         }          
 }
 
@@ -102,6 +119,35 @@ int main(void)
 	hardware.SetAudioBlockSize(blocksize);
     hardware.StartAudio(AudioCallback);
 
+    SdmmcHandler::Config sd_cfg;
+    sd_cfg.Defaults();
+    if (sdcard.Init(sd_cfg) != SdmmcHandler::Result::OK)
+    {
+        hardware.PrintLine("SD card initialization failed");
+        return 1;
+    }
+    if (fsi.Init(FatFSInterface::Config::MEDIA_SD) != FatFSInterface::Result::OK)
+    {
+        hardware.PrintLine("File system initialization failed");
+        return 1;
+    }
+    if (f_mount(&fsi.GetSDFileSystem(), "/", 1) != FR_OK)
+    {
+        hardware.PrintLine("File system mount failed");
+        return 1;
+    }
+
+    System::Delay(100);
+
+    WavWriter<32768>::Config config;
+    config.samplerate = sysSampleRate; 
+    config.channels = 2;          
+    config.bitspersample = 16;    
+    writer.Init(config);
+
+     // Open WAV file
+     writer.OpenFile("loop.wav");
+
     //update loop
     for(;;)
     { 
@@ -115,6 +161,12 @@ int main(void)
         if (playButton.RisingEdge()){ //toggles playback
             play = !play; 
         } 
-        System::Delay(1);
+        
+        writer.Write();
+        if(count>=48000 && !saved){
+            writer.SaveFile();
+            hardware.PrintLine("file saved");
+            saved = true;
+        }
     }
 }
