@@ -12,6 +12,8 @@
 using namespace daisy;
 using namespace daisysp;
 
+//#define LOGG // start serial over USB Logger class
+
 DaisySeed hardware;
 
 SdmmcHandler sdcard;
@@ -19,11 +21,15 @@ FatFSInterface fsi;
 WavWriter<16384> writer;
 bool saved = true;
 
+FIL fp;
+bool stereo = true;
+
 #define BUFFER_LENGTH (48000 * 349) // 349.52 secs; 48k * 2 (stereo) * 2  (16-bit or 2 bytes per sample) = 192k/s
-float DSY_SDRAM_BSS Buffer[BUFFER_LENGTH];
+int16_t DSY_SDRAM_BSS Buffer[BUFFER_LENGTH];
 
 float bufferIndex = 0;
-uint32_t end = 48000;
+//uint32_t length = 48000;
+size_t length = 48000;
 
 float sysSampleRate;
 
@@ -39,8 +45,8 @@ float GetBufferValueInterpolated(float index){
     int32_t indexInt = static_cast<int32_t>(index); //strips decimal
     float indexFraction = index - indexInt; //gets decimal
 
-    float currentChannel = Buffer[indexInt];
-    float nextChannel = Buffer[indexInt + 2]; //if currentChannel is left channel, nextChannel will be left channel. Same with right
+    float currentChannel = s162f(Buffer[indexInt]);
+    float nextChannel = s162f(Buffer[indexInt + 2]); //if currentChannel is left channel, nextChannel will be left channel. Same with right
     
     // Linear interpolation (creating value halfway between samples)
     float sig = currentChannel + (nextChannel - currentChannel) * indexFraction;
@@ -49,8 +55,36 @@ float GetBufferValueInterpolated(float index){
 }
 
 void SetBufferValue(uint32_t index, StereoPair signal){
-    Buffer[index] = signal.left;
-    Buffer[index + 1] = signal.right;
+    Buffer[index] = f2s16(signal.left);
+    Buffer[index + 1] = f2s16(signal.right);
+}
+
+/* adds given file to the buffer. Only supports 16bit PCM 48kHz. 
+	 * If Stereo samples are interleaved left then right.
+	 * return 0: succesful, 1: file read failed, 2: invalid format, 3: file too large
+	*/ 
+int SetSample(TCHAR *fname) {
+    UINT bytesread;
+    WAV_FormatTypeDef wav_data; 
+    
+    memset(Buffer, 0, BUFFER_LENGTH);
+    
+    if(f_open(&fp, fname, (FA_OPEN_EXISTING | FA_READ)) == FR_OK) {
+        // Populate the WAV Info
+        if(f_read(&fp, (void *)&wav_data, sizeof(WAV_FormatTypeDef), &bytesread) != FR_OK) return 1;	
+    } else return 4;
+
+    if (wav_data.SampleRate != 48000 || wav_data.BitPerSample != 16) return 2;
+    if (wav_data.SubCHunk2Size > BUFFER_LENGTH || wav_data.NbrChannels > 2) return 3;
+    stereo = wav_data.NbrChannels == 2;
+
+    if (f_lseek(&fp, sizeof(WAV_FormatTypeDef)) != FR_OK) return 5;
+    
+    if(f_read(&fp, Buffer, wav_data.SubCHunk2Size, &bytesread) != FR_OK)return 6;
+    length = bytesread / (wav_data.BitPerSample/8) / (stereo ? 2 : 1);
+
+    f_close(&fp);
+    return 0;
 }
 
 void FillBuffer(float sampleRate){ //fills buffer with test tone
@@ -71,30 +105,32 @@ void AudioCallback(AudioHandle::InterleavingInputBuffer  in,
     AudioHandle::InterleavingOutputBuffer out,
     size_t                                size)
 {
-    StereoPair sampled = StereoPair{0, 0};
+    //StereoPair sampled = StereoPair{0, 0};
+    float left = 0;
+    float right = 0;
     for (size_t i = 0; i < size; i += 2)
         {
             if (record){
                 SetBufferValue(bufferIndex * 2.0f, StereoPair{in[i], in[i+1]}); //* 2 to access the buffer as if it contained single left and right channel structs
                 bufferIndex += 1.0f; 
-                end = bufferIndex;
+                length = bufferIndex;
 
                 float sampleArray[2] = {in[i], in[i+1]};
                 writer.Sample(sampleArray); // Call the Sample function with the array
             }
             else if(play){
-                if (bufferIndex < end)
+                if (bufferIndex < length)
                     {
-                        sampled.right = GetBufferValueInterpolated(bufferIndex * 2.0f); 
-                        sampled.left = GetBufferValueInterpolated(bufferIndex * 2.0f + 1.0f);
+                        right = GetBufferValueInterpolated(bufferIndex * 2.0f); 
+                        left = GetBufferValueInterpolated(bufferIndex * 2.0f + 1.0f);
                         bufferIndex += 1.0f;
                     }     
                 else{
                     bufferIndex = 0.0f;
                     }
                 }      
-        out[i] = sampled.left + in[i];
-        out[i + 1] = sampled.right + in[i + 1]; 
+        out[i] = left + in[i];
+        out[i + 1] = right + in[i + 1]; 
         }          
 }
 
@@ -103,11 +139,17 @@ int main(void)
     hardware.Configure();
     hardware.Init();
 
+    // logging over serial USB
+	#ifdef LOGG
+	hardware.StartLog(true); 
+	hardware.PrintLine("monitoring started");
+	#endif
+    
     size_t blocksize = 4;
 
     sysSampleRate = hardware.AudioSampleRate();
 
-    FillBuffer(sysSampleRate);
+    //FillBuffer(sysSampleRate);
     
     Switch recButton;
     Switch playButton;
@@ -138,14 +180,17 @@ int main(void)
 
     System::Delay(100);
 
+    char sampleName[] = "loop.wav"; //read to buffer
+    int error = SetSample(sampleName);
+    hardware.PrintLine("setsample error: %d", error);
+
     WavWriter<16384>::Config config;
     config.samplerate = sysSampleRate; 
     config.channels = 2;          
     config.bitspersample = 16;    
     writer.Init(config);
 
-     // Open WAV file
-     writer.OpenFile("loop.wav");
+     
 
     //update loop
     for(;;)
@@ -153,7 +198,12 @@ int main(void)
         recButton.Debounce();
         playButton.Debounce();
         hardware.SetLed(recButton.Pressed()); //onboard led indicates recording state
+        if (recButton.Pressed()){
+            writer.Write();
+        }
         if (recButton.RisingEdge()){ //resets buffer index when recording begins
+            // Open WAV file
+            writer.OpenFile("loop.wav");
             bufferIndex = 0;
         }
         if (recButton.FallingEdge()){
@@ -164,7 +214,6 @@ int main(void)
             play = !play; 
         } 
         
-        writer.Write();
         if(!saved){
             writer.SaveFile();
             hardware.PrintLine("file saved");
