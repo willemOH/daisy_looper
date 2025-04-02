@@ -1,9 +1,7 @@
 #include "daisy_seed.h"
 #include "daisysp.h"
 
-//ostensibly needed for sd writing
-#include <stdio.h>
-#include <string.h>
+//needed for sd writing
 #include "daisy_core.h"
 #include "util/wav_format.h"
 #include "ff.h"
@@ -18,7 +16,7 @@ DaisySeed hardware;
 
 SdmmcHandler sdcard;
 FatFSInterface fsi;
-WavWriter<16384> writer;
+WavWriter<16384> writer; //16-bit
 bool saved = true;
 
 FIL fp;
@@ -28,8 +26,8 @@ bool stereo = true;
 int16_t DSY_SDRAM_BSS Buffer[BUFFER_LENGTH];
 
 float bufferIndex = 0;
-//uint32_t length = 48000;
 size_t length = 48000;
+uint32_t recordedLength;
 
 float sysSampleRate;
 
@@ -83,6 +81,10 @@ int SetSample(TCHAR *fname) {
     if(f_read(&fp, Buffer, wav_data.SubCHunk2Size, &bytesread) != FR_OK)return 6;
     length = bytesread / (wav_data.BitPerSample/8) / (stereo ? 2 : 1);
 
+    //shows bug where there is a discrepancy between the following values after sample load
+    hardware.PrintLine("SubCHunk2Size: %d", wav_data.SubCHunk2Size);
+    hardware.PrintLine("Bytes read: %d", bytesread);
+
     f_close(&fp);
     return 0;
 }
@@ -98,6 +100,20 @@ void FillBuffer(float sampleRate){ //fills buffer with test tone
     {
         float signal = osc.Process();
         SetBufferValue(i, StereoPair{signal, signal});
+    }
+}
+
+// shows bug if compare the buffer samples after recording and then again after loading from wav
+void logBufferSamples(){
+    hardware.PrintLine("current samples in buffer: %u", length);
+    hardware.PrintLine("Buffer (first 5 samples):");
+    for (size_t i = 0; i < 5; i++) {
+        hardware.PrintLine("Buffer[%d]: %d", i, Buffer[i]);
+    }
+
+    hardware.PrintLine("Buffer (last 5 samples):");
+    for (size_t i = length - 5; i < length; i++) {
+        hardware.PrintLine("Buffer[%d]: %d", i, Buffer[i]);
     }
 }
 
@@ -184,6 +200,8 @@ int main(void)
     int error = SetSample(sampleName);
     hardware.PrintLine("setsample error: %d", error);
 
+    logBufferSamples();
+
     WavWriter<16384>::Config config;
     config.samplerate = sysSampleRate; 
     config.channels = 2;          
@@ -199,25 +217,33 @@ int main(void)
         playButton.Debounce();
         hardware.SetLed(recButton.Pressed()); //onboard led indicates recording state
         if (recButton.Pressed()){
+            record = true;
+            saved = false;
             writer.Write();
         }
+        else{
+            record = false;
+        }
+
+        if(!record && !saved){
+            writer.SaveFile();
+            recordedLength = writer.GetLengthSamps();
+            saved = true;
+            hardware.PrintLine("file saved");
+            hardware.PrintLine("file saved with %u samples", recordedLength);
+            hardware.PrintLine("current samples in buffer: %u", length);
+            logBufferSamples();
+        }
+
         if (recButton.RisingEdge()){ //resets buffer index when recording begins
             // Open WAV file
             writer.OpenFile("loop.wav");
             bufferIndex = 0;
         }
-        if (recButton.FallingEdge()){
-            saved = false;
-        }
-        record = recButton.Pressed();
+    
         if (playButton.RisingEdge()){ //toggles playback
             play = !play; 
         } 
         
-        if(!saved){
-            writer.SaveFile();
-            hardware.PrintLine("file saved");
-            saved = true;
-        }
     }
 }
