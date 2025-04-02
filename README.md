@@ -1,9 +1,13 @@
-# Soundbook
+I've seen many examples for loopers, samplers, etc for seed. And a few of them even read from the sd card. But there has been no clear example of one that is actually useful beyond experimenting or playing pre-recorded loops from elsewhere. Until now! I made one. Because a proper looper/sampler should 1. live sample input and 2. recall samples after reboot.
 
-## Author
+I needed this functionality for a project and soon found I would have to cook this one up/piece it together myself. I also soon found out why there may not have been an example already: it can be quite finicky/impossible on a breadboard setup and there is incomplete functionality in libDaisy to properly write to the sd card. Reading to memory is non-existent in the library too. Thankfully [hajaba](https://forum.electro-smith.com/u/hajaba) on this forum posted [some working code](https://forum.electro-smith.com/t/copy-wav-from-sd-card-to-sdram/4574/4) for reading that I modified a little. A few months of development and a pcb design later, and I've got it.
 
-Willem Hilliard
+Because it's been quite a long and difficult process for me to get what to many would almost think of for the next project after hello world, I wanted to share this looper code to give others a proper start with sampling and sd card usage. As well as some solutions to pitfalls I encountered along the way.
 
-## Description
+STEPS
 
-A sketchbook for sound
+1. Either download/copy this file https://github.com/willemOH/daisy_looper/blob/main/src/main.cpp and put it in a new seed project or setup as new repo: `git clone --recurse-submodules https://github.com/willemOH/daisy_looper` going through repo setup as documented here for daisyexamples https://daisy.audio/tutorials/cpp-dev-env/ (just `build-all` if you've done this before). Note: I've had issues here with vs code intellisense and inability to build because of incorrect drivers being built from submodules. If you run into these issues, leave a comment and I'll share some fixes I've found.
+2. If [this PR](https://github.com/electro-smith/libDaisy/pull/663) hasn't been accepted, make those changes to wavwriter.h 
+3. If using breadboard, make sure connections between sd card reader and seed are as close as possible. I could not get this to work on breadboard as seen here: https://forum.electro-smith.com/t/opinions-on-microsd-card-data-line-traces/7572 if you run into any of those errors, too long connections is why because this works once I got the design onto a pcb with less than 50mm distance between daisy pins and sd card reader pins w/ .3mm trace.
+
+I've tried to make this project as readable like example as I can. No doubt it could be better if it were an official example. This is a project that should be an essential example for daisy seed or pod and I would like to see it or a revised version put in the daisy examples repo.
